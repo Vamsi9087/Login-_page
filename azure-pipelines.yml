@@ -7,18 +7,44 @@ variables:
   acrName: 'myappregistry9087'
   acrLoginServer: 'myappregistry9087.azurecr.io'
   imageRepository: 'my-nextjs-app'
-  containerAppName: 'my-nextjs-app'
   resourceGroup: 'myapp-rg'
   tag: '$(Build.BuildId)'
+  NODE_VERSION: '22.x'
+  # Name of your self-hosted agent pool in Azure DevOps
+  AGENT_POOL: 'my-linux-vm-pool'
 
 stages:
 
+# ── Stage 1: Lint & Type Check ─────────────────────────────────────────────
+- stage: Lint
+  displayName: 'Lint & Type Check'
+  jobs:
+  - job: LintCheck
+    pool:
+      name: $(AGENT_POOL)
+    steps:
+    - task: NodeTool@0
+      displayName: 'Use Node.js $(NODE_VERSION)'
+      inputs:
+        versionSpec: $(NODE_VERSION)
+
+    - script: npm ci --frozen-lockfile
+      displayName: 'Install dependencies'
+
+    - script: npm run lint
+      displayName: 'Run ESLint'
+
+    - script: npx tsc --noEmit
+      displayName: 'TypeScript type check'
+
+# ── Stage 2: Build & Push Docker image to ACR ──────────────────────────────
 - stage: Build
-  displayName: 'Build and Push to ACR'
+  displayName: 'Build & Push to ACR'
+  dependsOn: Lint
   jobs:
   - job: BuildPush
     pool:
-      name: Default
+      name: $(AGENT_POOL)
     steps:
 
     - task: Docker@2
@@ -32,33 +58,47 @@ stages:
           $(tag)
           latest
 
+# ── Stage 3: Deploy directly on the VM ────────────────────────────────────
 - stage: Deploy
-  displayName: 'Deploy to Container App'
+  displayName: 'Deploy on Azure VM'
   dependsOn: Build
   jobs:
-  - deployment: DeployApp
+  - deployment: DeployOnVM
     pool:
-      name: Default
+      name: $(AGENT_POOL)
     environment: 'production'
     strategy:
       runOnce:
         deploy:
           steps:
+
           - task: AzureCLI@2
-            displayName: 'Update Container App'
+            displayName: 'ACR Login'
             inputs:
               azureSubscription: 'azure-service-connection'
               scriptType: bash
               scriptLocation: inlineScript
               inlineScript: |
-                az extension add --name containerapp --upgrade -y
-                az containerapp update \
-                  --name $(containerAppName) \
-                  --resource-group $(resourceGroup) \
-                  --image $(acrLoginServer)/$(imageRepository):$(tag)
-                echo "Deployed! URL:"
-                az containerapp show \
-                  --name $(containerAppName) \
-                  --resource-group $(resourceGroup) \
-                  --query properties.configuration.ingress.fqdn \
-                  --output tsv
+                az acr login --name $(acrName)
+
+          - script: |
+              echo "Pulling latest image..."
+              docker pull $(acrLoginServer)/$(imageRepository):$(tag)
+
+              echo "Stopping old container if running..."
+              docker stop nextjs-app || true
+              docker rm   nextjs-app || true
+
+              echo "Starting new container..."
+              docker run -d \
+                --name nextjs-app \
+                --restart unless-stopped \
+                -p 3000:3000 \
+                -e NODE_ENV=production \
+                $(acrLoginServer)/$(imageRepository):$(tag)
+
+              echo "Cleaning up old images..."
+              docker image prune -f
+
+              echo "✅ App running at http://$(hostname -I | awk '{print $1}'):3000"
+            displayName: 'Run Docker container on VM'
