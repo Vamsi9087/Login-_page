@@ -32,7 +32,7 @@ export default function Home() {
           <p className="mt-6 text-white/60 text-base max-w-lg mx-auto leading-relaxed">
             Your workspace. Your rules. Secure access, zero friction —{" "}
             <span className="text-pink-400 font-semibold">sign in</span> to pick up where you left off
-            or <span className="text-indigo-300 font-semibold">reach out</span> and we'll get you started.
+            or <span className="text-indigo-300 font-semibold">reach out</span> and we&apos;ll get you started.
           </p>
           <div className="flex justify-center gap-8 mt-6">
             {[["🔒", "Bank-grade security"], ["⚡", "Instant access"], ["🎯", "Built for you"]].map(([icon, text]) => (
