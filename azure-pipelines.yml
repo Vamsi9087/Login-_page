@@ -4,13 +4,9 @@ trigger:
       - main
 
 variables:
-  acrName: 'myappregistry9087'
-  acrLoginServer: 'myappregistry9087.azurecr.io'
   imageRepository: 'my-nextjs-app'
-  resourceGroup: 'myapp-rg'
   tag: '$(Build.BuildId)'
   NODE_VERSION: '22.x'
-  # Name of your self-hosted agent pool in Azure DevOps
   AGENT_POOL: 'my-linux-vm-pool'
 
 stages:
@@ -37,30 +33,23 @@ stages:
     - script: npx tsc --noEmit
       displayName: 'TypeScript type check'
 
-# ── Stage 2: Build & Push Docker image to ACR ──────────────────────────────
+# ── Stage 2: Build Docker image on VM ──────────────────────────────────────
 - stage: Build
-  displayName: 'Build & Push to ACR'
+  displayName: 'Build Docker Image'
   dependsOn: Lint
   jobs:
-  - job: BuildPush
+  - job: BuildImage
     pool:
       name: $(AGENT_POOL)
     steps:
+    - script: |
+        docker build -t $(imageRepository):$(tag) .
+        docker tag $(imageRepository):$(tag) $(imageRepository):latest
+      displayName: 'Build Docker Image'
 
-    - task: Docker@2
-      displayName: 'Build and Push Docker Image'
-      inputs:
-        command: buildAndPush
-        repository: $(imageRepository)
-        dockerfile: Dockerfile
-        containerRegistry: 'acr-service-connection'
-        tags: |
-          $(tag)
-          latest
-
-# ── Stage 3: Deploy directly on the VM ────────────────────────────────────
+# ── Stage 3: Deploy on the VM ──────────────────────────────────────────────
 - stage: Deploy
-  displayName: 'Deploy on Azure VM'
+  displayName: 'Deploy on VM'
   dependsOn: Build
   jobs:
   - deployment: DeployOnVM
@@ -71,21 +60,8 @@ stages:
       runOnce:
         deploy:
           steps:
-
-          - task: AzureCLI@2
-            displayName: 'ACR Login'
-            inputs:
-              azureSubscription: 'azure-service-connection'
-              scriptType: bash
-              scriptLocation: inlineScript
-              inlineScript: |
-                az acr login --name $(acrName)
-
           - script: |
-              echo "Pulling latest image..."
-              docker pull $(acrLoginServer)/$(imageRepository):$(tag)
-
-              echo "Stopping old container if running..."
+              echo "Stopping old container..."
               docker stop nextjs-app || true
               docker rm   nextjs-app || true
 
@@ -95,10 +71,10 @@ stages:
                 --restart unless-stopped \
                 -p 3000:3000 \
                 -e NODE_ENV=production \
-                $(acrLoginServer)/$(imageRepository):$(tag)
+                $(imageRepository):$(tag)
 
               echo "Cleaning up old images..."
               docker image prune -f
 
               echo "✅ App running at http://$(hostname -I | awk '{print $1}'):3000"
-            displayName: 'Run Docker container on VM'
+            displayName: 'Run Docker container'

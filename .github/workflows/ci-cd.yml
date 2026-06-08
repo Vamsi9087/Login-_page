@@ -7,16 +7,14 @@ on:
     branches: [main]
 
 env:
-  ACR_LOGIN_SERVER: myappregistry9087.azurecr.io
   IMAGE_NAME: my-nextjs-app
-  RESOURCE_GROUP: myapp-rg
   NODE_VERSION: '22.x'
 
 jobs:
   # ── Job 1: Lint & Type Check ──────────────────────────────────────────────
   lint:
     name: Lint & Type Check
-    runs-on: self-hosted          # ← runs on your Azure Linux VM agent
+    runs-on: self-hosted
 
     steps:
       - name: Checkout code
@@ -37,10 +35,10 @@ jobs:
       - name: TypeScript type check
         run: npx tsc --noEmit
 
-  # ── Job 2: Build & Push Docker image to ACR ───────────────────────────────
+  # ── Job 2: Build Docker image on VM ───────────────────────────────────────
   build:
-    name: Build & Push to ACR
-    runs-on: self-hosted          # ← runs on your Azure Linux VM agent
+    name: Build Docker Image
+    runs-on: self-hosted
     needs: lint
     if: github.ref == 'refs/heads/main'
 
@@ -48,41 +46,20 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Log in to Azure Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.ACR_LOGIN_SERVER }}
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ env.IMAGE_NAME }}:${{ github.run_number }} .
+          docker tag ${{ env.IMAGE_NAME }}:${{ github.run_number }} ${{ env.IMAGE_NAME }}:latest
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          push: true
-          tags: |
-            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
-            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ── Job 3: Deploy directly on the VM ─────────────────────────────────────
+  # ── Job 3: Deploy on the VM ───────────────────────────────────────────────
   deploy:
-    name: Deploy on Azure VM
-    runs-on: self-hosted          # ← runs on your Azure Linux VM agent
+    name: Deploy on VM
+    runs-on: self-hosted
     needs: build
     if: github.ref == 'refs/heads/main'
 
     steps:
-      - name: Pull latest image
-        run: |
-          docker pull ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
-
-      - name: Stop & remove old container
+      - name: Stop old container
         run: |
           docker stop nextjs-app || true
           docker rm   nextjs-app || true
@@ -94,11 +71,10 @@ jobs:
             --restart unless-stopped \
             -p 3000:3000 \
             -e NODE_ENV=production \
-            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
+            ${{ env.IMAGE_NAME }}:${{ github.run_number }}
 
       - name: Clean up old images
         run: docker image prune -f
 
       - name: Print app URL
-        run: |
-          echo "✅ App deployed at http://$(hostname -I | awk '{print $1}'):3000"
+        run: echo "✅ App running at http://$(hostname -I | awk '{print $1}'):3000"
